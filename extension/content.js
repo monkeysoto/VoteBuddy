@@ -99,6 +99,9 @@
 
   // "23 hours, 14 minutes" / "5h 3m" / "1 day 2 hours" / "12:34:56" -> seconds
   function parseDuration(s) {
+    // A negative timer ("-5 hours", "-00:12:30") means the site's countdown ran past zero:
+    // the wait is over, so it isn't a real timer.
+    if (/(^|[^\w-])[-−]\s*\d/.test(s)) return null;
     const unit = { d: 86400, h: 3600, m: 60, s: 1 };
     const re = /(\d+(?:\.\d+)?)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b/gi;
     let t = 0, found = false, m;
