@@ -1,0 +1,12 @@
+# personal data - never upload
+votes.json
+votes.json.tmp
+browser-profile/
+
+# build output
+build/
+dist/
+release/
+*.spec
+__pycache__/
+*.pyc

@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "VoteBuddy Autofill",
+  "version": "1.2",
+  "description": "Fills your Minecraft username on vote pages opened by the VoteBuddy app, submits pages that have no captcha, and tells the app the site's next-vote timer. Does nothing on other pages.",
+  "icons": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" },
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

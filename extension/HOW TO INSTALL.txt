@@ -1,0 +1,30 @@
+VoteBuddy Autofill - one-time browser setup
+===========================================
+
+Works in Opera / Opera GX, Chrome, Edge and Brave. (Not Firefox.)
+
+1. Open your browser's extensions page by typing this in the address bar:
+      Opera / Opera GX:  opera://extensions
+      Chrome:            chrome://extensions
+      Edge:              edge://extensions
+      Brave:             brave://extensions
+2. Turn on "Developer mode" (a switch, usually top-right; on Edge it's
+   on the left).
+3. Click "Load unpacked".
+4. Pick THIS folder (the "extension" folder that came with VoteBuddy).
+5. "VoteBuddy Autofill" now shows in the list. Done.
+
+Keep this folder somewhere permanent (not a temp folder) - the browser
+loads the extension from here. If you move it, do steps 3-4 again.
+
+Chrome/Edge may show a "Disable developer mode extensions" pop-up when
+you start the browser. Just close it (don't click Disable).
+
+AFTER AN UPDATE: on the extensions page switch VoteBuddy Autofill OFF and
+back ON (or restart the browser). The reload button alone can leave the old
+background part running, and then site timers won't reach the app.
+
+What it does: when VoteBuddy opens a vote link, it fills your Minecraft
+username into the username box, clicks Vote if the page has no captcha,
+and reads the site's "vote again in ..." timer for the app. It does
+nothing on pages VoteBuddy didn't open, and it never touches captchas.
