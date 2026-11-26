@@ -21,6 +21,22 @@ from tkinter import ttk
 
 import customtkinter as ctk
 
+CHROME_PATHS = [
+    os.path.join(os.environ.get(v, ""), r"Google\Chrome\Application\chrome.exe")
+    for v in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
+]
+
+
+def open_in_browser(url):
+    """Open vote pages in Chrome (where the Autofill extension lives)."""
+    for path in CHROME_PATHS:
+        if os.path.isfile(path):
+            import subprocess
+            subprocess.Popen([path, url])
+            return
+    webbrowser.open_new_tab(url)
+
+
 FROZEN = getattr(sys, "frozen", False)  # True when running as VoteBuddy.exe
 APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
 # Each person's list lives in their own %APPDATA%\VoteBuddy, so the .exe can
@@ -72,6 +88,8 @@ def load():
     data.setdefault("autosubmit", True)
     data.setdefault("theme", "dark")
     data.setdefault("sites", [])
+    data.setdefault("phone_on", False)
+    data.setdefault("phone_topic", "")
     for s in data["sites"]:
         s.setdefault("id", uuid.uuid4().hex[:10])  # lets the extension say which site
     return data
@@ -117,6 +135,62 @@ def start_report_server():
         return False  # port busy (VoteBuddy already open?) - timers just won't sync
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return True
+
+
+# ---- phone alerts (ntfy) ----
+# ntfy.sh is a free push-notification service with iPhone and Android apps.
+# The phone subscribes to a private random "topic" name; VoteBuddy posts to it.
+NTFY_SERVER = "https://ntfy.sh"
+
+
+def new_topic():
+    import secrets
+    abc = "abcdefghjkmnpqrstuvwxyz23456789"  # no look-alike letters, easy to type
+    return "votebuddy-" + "".join(secrets.choice(abc) for _ in range(10))
+
+
+def ssl_contexts():
+    """certifi's certificate list first (some PCs have an outdated Windows list), then Windows'."""
+    import ssl
+    out = []
+    try:
+        import certifi
+        out.append(ssl.create_default_context(cafile=certifi.where()))
+    except Exception:
+        pass
+    out.append(ssl.create_default_context())
+    return out
+
+
+def send_phone(topic, title, message, links=(), done=None):
+    """Push a notification to the phone in the background.
+    links: [(label, url)] - first one opens when the notification is tapped.
+    done(error_or_None) runs on the worker thread, so it must only set simple values."""
+    import urllib.request
+    body = {"topic": topic, "title": title, "message": message, "priority": 4,
+            "tags": ["ballot_box_with_check"]}
+    links = [(l[:40], u) for l, u in links if u.startswith(("http://", "https://"))]
+    if links:
+        body["click"] = links[0][1]
+        body["actions"] = [{"action": "view", "label": l, "url": u, "clear": True}
+                           for l, u in links[:3]]  # ntfy allows 3 buttons
+
+    def work():
+        err = None
+        for ctx in ssl_contexts():
+            try:
+                req = urllib.request.Request(NTFY_SERVER, data=json.dumps(body).encode("utf-8"),
+                                             headers={"Content-Type": "application/json",
+                                                      "User-Agent": "VoteBuddy"})
+                with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
+                    r.read()
+                err = None
+                break
+            except Exception as e:  # no internet, server down, bad certificates, ...
+                err = str(e) or e.__class__.__name__
+        if done:
+            done(err)
+    threading.Thread(target=work, daemon=True).start()
 
 
 def save(data):
@@ -341,6 +415,109 @@ class SiteDialog(ctk.CTkToplevel):
         self.destroy()
 
 
+class PhoneDialog(ctk.CTkToplevel):
+    """Set up phone notifications through the free ntfy app (iPhone + Android)."""
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Phone alerts")
+        set_icon(self)
+        self.resizable(False, False)
+        data = app.data
+        if not data.get("phone_topic"):
+            data["phone_topic"] = new_topic()
+            save(data)
+
+        ctk.CTkLabel(self, text="Get a ping on your phone when votes are ready",
+                     font=ctk.CTkFont(size=17, weight="bold")).pack(padx=24, pady=(20, 8), anchor="w")
+        steps = ("1.  Install the free \"ntfy\" app on your phone\n"
+                 "      (App Store on iPhone, Google Play on Android).\n"
+                 "2.  Open it, tap  +  (Subscribe to topic) and type the name below.\n"
+                 "      Leave \"Use another server\" off. Allow notifications when asked.\n"
+                 "3.  Click \"Send test\" here. Your phone should ping.")
+        ctk.CTkLabel(self, text=steps, justify="left",
+                     font=ctk.CTkFont(size=13)).pack(padx=24, anchor="w")
+
+        ctk.CTkLabel(self, text="Your topic name (keep it private, like a password):",
+                     text_color=MUTED).pack(padx=24, pady=(14, 2), anchor="w")
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(padx=24, anchor="w")
+        self.topic = tk.StringVar(value=data["phone_topic"])
+        ctk.CTkEntry(row, textvariable=self.topic, width=260, corner_radius=RADIUS,
+                     font=ctk.CTkFont(family="Consolas", size=15, weight="bold")).pack(side="left")
+        bubble(row, "Copy", self.copy, kind="soft", width=70).pack(side="left", padx=6)
+        bubble(row, "New name", self.regen, kind="soft", width=90).pack(side="left")
+
+        self.on = tk.BooleanVar(value=data.get("phone_on", False))
+        ctk.CTkSwitch(self, text="Send alerts to my phone when a vote is ready",
+                      variable=self.on, onvalue=True, offvalue=False).pack(padx=24, pady=(16, 4), anchor="w")
+        ctk.CTkLabel(self, text="Alerts are sent while VoteBuddy is running on this PC "
+                                "(tip: tick \"Start with Windows\").",
+                     text_color=MUTED, font=ctk.CTkFont(size=12)).pack(padx=24, anchor="w")
+
+        self.result = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=13))
+        self.result.pack(padx=24, pady=(10, 0), anchor="w")
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(padx=20, pady=(8, 18), anchor="e")
+        bubble(btns, "Send test", self.test, kind="soft", width=100).pack(side="left", padx=4)
+        bubble(btns, "Save", self.ok, kind="go", width=90).pack(side="left", padx=4)
+
+        self.transient(app)
+        bring_up(self)
+        self.after(150, self.grab_set)
+
+    def clean(self):
+        t = "".join(c for c in self.topic.get().strip() if c.isalnum() or c in "-_")[:64]
+        self.topic.set(t)
+        return t
+
+    def copy(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.clean())
+        self.result.configure(text="Copied.", text_color=MUTED)
+
+    def regen(self):
+        self.topic.set(new_topic())
+        self.result.configure(text="New name made. Subscribe to it on your phone, then Save.",
+                              text_color=MUTED)
+
+    def test(self):
+        topic = self.clean()
+        if len(topic) < 8:
+            self.result.configure(text="Topic name is too short.", text_color="#ef4444")
+            return
+        self.result.configure(text="Sending...", text_color=MUTED)
+        box = {}
+        send_phone(topic, "VoteBuddy test 🎉", "Phone alerts work! You'll get a ping like this "
+                   "when a vote is ready.", done=lambda err: box.setdefault("err", err or ""))
+
+        def wait(n=0):
+            if not self.winfo_exists():
+                return
+            if "err" not in box:
+                if n < 40:
+                    self.after(250, lambda: wait(n + 1))
+                return
+            if box["err"]:
+                self.result.configure(text=f"Couldn't send: {box['err'][:80]}", text_color="#ef4444")
+            else:
+                self.result.configure(text="✓ Sent! Check your phone.", text_color=GREEN)
+        wait()
+
+    def ok(self):
+        topic = self.clean()
+        if self.on.get() and len(topic) < 8:
+            self.result.configure(text="Topic name is too short.", text_color="#ef4444")
+            return
+        self.app.data["phone_topic"] = topic
+        self.app.data["phone_on"] = self.on.get()
+        save(self.app.data)
+        self.app.flash("Phone alerts " + ("on." if self.on.get() else "off."), 5)
+        self.destroy()
+
+
 class App(ctk.CTk):
     def __init__(self):
         self.data = load()
@@ -395,6 +572,7 @@ class App(ctk.CTk):
         bubble(bar, "Remove", self.remove, kind="soft", width=90).pack(side="left")
         bubble(bar, "Reset timer", self.reset, kind="soft", width=110).pack(side="left", padx=6)
         bubble(bar, "Check timer", self.check_timers, kind="soft", width=110).pack(side="left")
+        bubble(bar, "Phone alerts", self.phone_setup, kind="soft", width=120).pack(side="left", padx=6)
         bubble(bar, "Vote ALL ready", self.vote_all_ready, kind="go", width=150).pack(side="right")
         bubble(bar, "Vote selected", self.vote_selected, width=130).pack(side="right", padx=6)
 
@@ -494,6 +672,7 @@ class App(ctk.CTk):
             else:
                 self.notified.discard(s["url"])
         if newly_due:
+            self.phone_alert(newly_due)
             if self.auto_var.get():
                 self.open_votes(newly_due)
             else:
@@ -527,6 +706,21 @@ class App(ctk.CTk):
         self.after(1500, lambda: self.attributes("-topmost", False))
         self.title(f"({n} ready) VoteBuddy - Minecraft vote helper")
 
+    def phone_alert(self, indexes):
+        topic = self.data.get("phone_topic")
+        if not (self.data.get("phone_on") and topic):
+            return
+        sites = [self.sites()[i] for i in indexes]
+        n = len(sites)
+        title = f"{sites[0]['name']} is ready to vote!" if n == 1 else f"{n} votes are ready!"
+        names = ", ".join(s["name"] for s in sites[:6]) + (f" +{n - 6} more" if n > 6 else "")
+        msg = names + "\nTap to open the vote page." if n == 1 else names + "\nTap a button to open a vote page."
+        send_phone(topic, title, msg, [(s["name"], s["url"]) for s in sites],
+                   done=lambda err: err and self.flash(f"Couldn't send phone alert: {err}", 15))
+
+    def phone_setup(self):
+        PhoneDialog(self)
+
     def flash(self, msg, seconds=12):
         self.msg, self.msg_until = msg, time.time() + seconds
 
@@ -544,7 +738,7 @@ class App(ctk.CTk):
             url += "&vbsite=" + site["id"]  # so the site's timer comes back to this row
             if self.submit_var.get() and not check_only:
                 url += "&vbsubmit=1"  # extension clicks Vote only if there's no captcha
-        webbrowser.open_new_tab(url)  # opens in your default browser
+        open_in_browser(url)  # Chrome if installed, else the default browser
 
     def open_votes(self, indexes):
         if not indexes:

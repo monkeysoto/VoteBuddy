@@ -8,6 +8,7 @@ A little Windows app that keeps track of your Minecraft server vote links so you
 - Clicks **Vote** for you on sites that **don't** have a captcha
 - Reads the site's own "you can vote again in…" timer so your countdowns are exact
 - "Did you vote?" pop-up after each site, where you can adjust the time until the next vote
+- **Phone alerts** on iPhone and Android: your phone pings when a vote is ready, and tapping the alert opens the vote page
 - Dark mode, start-with-Windows option
 
 > VoteBuddy never solves or clicks captchas / "verify you're human" boxes. On sites that have one, it fills your name and you tick the box and click Vote yourself. Most servers ban automated captcha solving, so this keeps your account safe.
@@ -32,11 +33,29 @@ Your list is saved in `%APPDATA%\VoteBuddy\votes.json`, so it's kept when you up
 | **Check timer** | Opens the site only to read its "vote again in…" timer (no voting). |
 | **Reset timer** | Marks a site as ready now. |
 
+| **Phone alerts** | Sets up phone notifications (see below). |
+
 | Option | What it does |
 | --- | --- |
 | **Auto-open** | Opens vote pages by itself the moment they're ready. |
 | **Autofill name** | Lets the extension type your username in. |
 | **Auto-submit if no captcha** | Lets the extension click Vote when there's no captcha. |
+
+## Phone alerts (iPhone & Android)
+
+VoteBuddy can ping your phone when a vote is ready. It uses [ntfy](https://ntfy.sh), a free notification app. You don't need an account.
+
+1. Install **ntfy** on your phone from the App Store (iPhone) or Google Play (Android).
+2. In VoteBuddy, click **Phone alerts**. It shows a private topic name such as `votebuddy-k3m9q2xh7p`.
+3. In the ntfy app, tap **+**, type that topic name and subscribe. Allow notifications when it asks.
+4. Back in VoteBuddy, click **Send test**. Your phone should ping. Then turn on the switch and click **Save**.
+
+When you get an alert, tap it (or one of its buttons) to open the vote page on your phone.
+
+Good to know:
+- Alerts are sent by VoteBuddy on your PC, so the PC has to be on with VoteBuddy running. Tick **Start with Windows**.
+- Treat the topic name like a password. Anyone who knows it can see your alerts. If it leaks, click **New name**.
+- If you vote on your phone, VoteBuddy on the PC doesn't know about it. Use **Vote selected** → **I voted** later, or let **Check timer** read the site's timer.
 
 ## Building it yourself
 
@@ -53,4 +72,5 @@ The finished app is in `release\VoteBuddy.zip`. You can also run it without buil
 
 - `votebuddy.pyw` is the app (Python + CustomTkinter).
 - `extension/` is a small browser extension. VoteBuddy opens links with a tag after the `#` (for example `#vbuser=Steve`). That part of a link stays in your browser and is never sent to the website. The extension only acts on tabs with that tag.
+- Phone alerts are sent to `https://ntfy.sh` with only the site names and vote links. Your username is not included.
 - The extension sends site timers to the app at `http://127.0.0.1:47615`. That address only works on your own PC, and the app only accepts it from a browser extension, not from websites.
