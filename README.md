@@ -9,6 +9,7 @@ A little Windows app that keeps track of your Minecraft server vote links so you
 - Reads the site's own "you can vote again in…" timer so your countdowns are exact
 - "Did you vote?" pop-up after each site, where you can adjust the time until the next vote
 - **Phone alerts** on iPhone and Android: your phone pings when a vote is ready, and tapping the alert opens the vote page
+- **Updates itself**: checks GitHub on start, and "Check for updates" at the bottom installs a new version in one click
 - Dark mode, start-with-Windows option
 
 > VoteBuddy never solves or clicks captchas / "verify you're human" boxes. On sites that have one, it fills your name and you tick the box and click Vote yourself. Most servers ban automated captcha solving, so this keeps your account safe.
@@ -56,6 +57,16 @@ Good to know:
 - Alerts are sent by VoteBuddy on your PC, so the PC has to be on with VoteBuddy running. Tick **Start with Windows**.
 - Treat the topic name like a password. Anyone who knows it can see your alerts. If it leaks, click **New name**.
 - If you vote on your phone, VoteBuddy on the PC doesn't know about it. Use **Vote selected** → **I voted** later, or let **Check timer** read the site's timer.
+
+## Updates
+
+From v1.3 on, VoteBuddy checks for a new version each time it starts. When one is out, a green **Update to vX available** link appears at the bottom. Click it, then click **Update now**. VoteBuddy downloads the new version, swaps itself out and restarts. Your vote list is kept. You can also click **Check for updates** at any time.
+
+If the update includes a new browser extension, VoteBuddy tells you to switch VoteBuddy Autofill off and back on.
+
+Coming from v1.0–v1.2? Those don't have the updater yet, so download v1.3 or later once from Releases.
+
+**Publishing a new version (for the maintainer):** raise `APP_VERSION` in `votebuddy.pyw`, run `build.bat`, then make a GitHub release whose tag is the same version (e.g. `v1.4`) with `release\VoteBuddy.zip` attached. Everyone's app picks it up.
 
 ## Building it yourself
 

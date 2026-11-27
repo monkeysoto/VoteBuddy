@@ -63,6 +63,14 @@ STARTUP_DIR = os.path.join(os.environ.get("APPDATA", ""),
                            r"Microsoft\Windows\Start Menu\Programs\Startup")
 STARTUP_FILE = os.path.join(STARTUP_DIR, "VoteBuddy.bat")
 
+# ---- server ad banner + credits (change these to advertise a different server) ----
+AD_TEXT = "Join us here at Chebish.net"
+AD_SUBTEXT = "Minecraft server  •  click to copy the IP"
+AD_IP = "chebishmc.net"   # clicking the banner copies this server IP
+AD_GIF = "banner.gif"   # 468x60 animated banner shipped with the app; text above is the fallback
+CREDITS = "Made by MonkeySoto"
+AD_PROMO = "Wanna Advertise your Minecraft server?\nContact monkeysoto on Discord"
+
 RADIUS = 18          # roundness of buttons ("bubble" look)
 GREEN = ("#16a34a", "#22c55e")
 GREEN_HOVER = ("#15803d", "#16a34a")
@@ -129,12 +137,142 @@ class ReportHandler(BaseHTTPRequestHandler):
 
 
 def start_report_server():
-    try:
-        srv = ThreadingHTTPServer(("127.0.0.1", PORT), ReportHandler)
-    except OSError:
-        return False  # port busy (VoteBuddy already open?) - timers just won't sync
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    """Listen in the background. Keeps retrying for a bit, because right after an
+    update the old copy of VoteBuddy may still be closing and holding the port."""
+    def run():
+        for _ in range(30):
+            try:
+                srv = ThreadingHTTPServer(("127.0.0.1", PORT), ReportHandler)
+            except OSError:
+                time.sleep(0.5)  # port busy (old copy closing, or VoteBuddy open twice)
+                continue
+            srv.serve_forever()
+            return
+    threading.Thread(target=run, daemon=True).start()
     return True
+
+
+# ---- updates from GitHub ----
+APP_VERSION = "1.3"
+GITHUB_REPO = "monkeysoto/VoteBuddy"
+RELEASES_PAGE = f"https://github.com/{GITHUB_REPO}/releases/latest"
+
+
+def version_tuple(v):
+    parts = []
+    for p in str(v).lstrip("vV").split("."):
+        digits = "".join(c for c in p if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def http_get(url, accept="application/json", progress=None):
+    """GET a URL with the same certificate fallbacks as phone alerts."""
+    import urllib.request
+    err = None
+    for ctx in ssl_contexts():
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "VoteBuddy", "Accept": accept})
+            with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
+                total = int(r.headers.get("Content-Length") or 0)
+                chunks, got = [], 0
+                while True:
+                    block = r.read(256 * 1024)
+                    if not block:
+                        break
+                    chunks.append(block)
+                    got += len(block)
+                    if progress and total:
+                        progress(got / total)
+                return b"".join(chunks)
+        except Exception as e:
+            err = e
+    raise err
+
+
+def latest_release():
+    """-> (version, notes, zip_url) of the newest GitHub release."""
+    test_feed = os.environ.get("VOTEBUDDY_TEST_FEED")  # only for testing updates locally
+    feed = test_feed or f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+    if test_feed:
+        import urllib.request
+        with urllib.request.urlopen(test_feed, timeout=10) as r:
+            info = json.loads(r.read())
+    else:
+        info = json.loads(http_get(feed, "application/vnd.github+json"))
+    zip_url = ""
+    prefix = "http://127.0.0.1:" if test_feed else f"https://github.com/{GITHUB_REPO}/releases/download/"
+    for a in info.get("assets", []):
+        url = a.get("browser_download_url", "")
+        if a.get("name", "").lower().endswith(".zip") and url.startswith(prefix):
+            zip_url = url
+            break
+    return info.get("tag_name", "").lstrip("vV"), info.get("body") or "", zip_url
+
+
+def extension_version(folder):
+    try:
+        with open(os.path.join(folder, "manifest.json"), encoding="utf-8") as f:
+            return json.load(f).get("version", "")
+    except (OSError, ValueError):
+        return ""
+
+
+def install_update(zip_bytes):
+    """Put the new VoteBuddy.exe (and extension files) in place of this one.
+    Windows can't overwrite a running .exe, but it can rename it, so the old one
+    becomes VoteBuddy.old.exe and is deleted the next time VoteBuddy starts.
+    Returns True if the browser extension changed."""
+    import io
+    import zipfile
+    exe = sys.executable
+    old = os.path.splitext(exe)[0] + ".old.exe"
+    ext_dir = os.path.join(APP_DIR, "extension")
+    ext_before = extension_version(ext_dir)
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+        members = {n.replace("\\", "/"): n for n in z.namelist()}
+        exe_name = next((n for n in members if n.lower().endswith(".exe") and "/" not in n.strip("/")), None)
+        if not exe_name:
+            raise ValueError("the download has no VoteBuddy.exe in it")
+        new_exe = z.read(members[exe_name])
+        if len(new_exe) < 1_000_000:
+            raise ValueError("the downloaded VoteBuddy.exe looks broken")
+        # extension files + readme next to the app
+        for name, real in members.items():
+            if name.endswith("/") or name == exe_name:
+                continue
+            if not (name.startswith("extension/") or name.lower() == "readme.md"):
+                continue
+            if ".." in name.split("/"):
+                continue
+            dest = os.path.join(APP_DIR, *name.split("/"))
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as f:
+                f.write(z.read(real))
+    tmp = exe + ".new"
+    with open(tmp, "wb") as f:
+        f.write(new_exe)
+    if os.path.exists(old):
+        os.remove(old)
+    os.replace(exe, old)
+    try:
+        os.replace(tmp, exe)
+    except OSError:
+        os.replace(old, exe)  # put the working one back
+        raise
+    return extension_version(ext_dir) != ext_before
+
+
+def cleanup_old_exe():
+    if FROZEN:
+        old = os.path.splitext(sys.executable)[0] + ".old.exe"
+        for _ in range(10):
+            try:
+                if os.path.exists(old):
+                    os.remove(old)
+                return
+            except OSError:
+                time.sleep(0.5)  # old copy still closing
 
 
 # ---- phone alerts (ntfy) ----
@@ -563,8 +701,17 @@ class App(ctk.CTk):
                       onvalue=True, offvalue=False).pack(side="right", padx=14)
 
         # bottom rows are packed first so the list can never squash them
-        self.status = ctk.CTkLabel(self, text="", text_color=MUTED, anchor="w")
-        self.status.pack(side="bottom", fill="x", padx=18, pady=(2, 10))
+        foot = ctk.CTkFrame(self, fg_color="transparent")
+        foot.pack(side="bottom", fill="x", padx=18, pady=(2, 10))
+        ctk.CTkLabel(foot, text=CREDITS + " ", text_color=MUTED,  # space: italics clip the last letter
+                     font=ctk.CTkFont(size=12, slant="italic")).pack(side="right")
+        self.update_link = ctk.CTkLabel(foot, text=f"v{APP_VERSION}  •  Check for updates", text_color=MUTED,
+                                        cursor="hand2", font=ctk.CTkFont(size=12, underline=True))
+        self.update_link.pack(side="right", padx=(0, 16))
+        self.update_link.bind("<Button-1>", lambda e: self.check_updates(manual=True))
+        self.new_release = None  # (version, notes, zip_url) once we know there's a newer one
+        self.status = ctk.CTkLabel(foot, text="", text_color=MUTED, anchor="w")
+        self.status.pack(side="left", fill="x", expand=True)
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.pack(side="bottom", fill="x", padx=12, pady=(6, 4))
         bubble(bar, "+ Add link", self.add, width=110).pack(side="left")
@@ -586,15 +733,197 @@ class App(ctk.CTk):
                             ("last", "Last voted", 170), ("next", "Next vote", 120)):
             self.tree.heading(c, text=label)
             self.tree.column(c, width=w, anchor="w" if c == "name" else "center")
+        ad_row = ctk.CTkFrame(box, fg_color="transparent")
+        ad_row.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
+        self.make_ad(ad_row).pack(side="right")
+        ctk.CTkLabel(ad_row, text=AD_PROMO, text_color=MUTED, justify="left",
+                     font=ctk.CTkFont(size=12)).pack(side="left", padx=(4, 12))
         sb = ctk.CTkScrollbar(box, command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y", padx=(0, 6), pady=10)
-        self.tree.pack(fill="both", expand=True, padx=(12, 0), pady=12)
+        sb.pack(side="right", fill="y", padx=(0, 6), pady=(10, 6))
+        self.tree.pack(fill="both", expand=True, padx=(12, 0), pady=(12, 8))
         self.tree.bind("<Double-1>", lambda e: self.vote_selected())
         self.style_tree()
 
         self.refresh()
         self.after(1000, self.tick)
+        threading.Thread(target=cleanup_old_exe, daemon=True).start()
+        self.after(1500, self.after_update_note)
+        self.after(5000, lambda: self.check_updates(manual=False))
+
+    # ---- updates ----
+    def run_bg(self, work, done):
+        """Run work() on a thread, then done(result, error) back on the UI thread."""
+        box = {}
+
+        def worker():
+            try:
+                box["r"] = work()
+            except Exception as e:
+                box["e"] = e
+            box["done"] = True
+        threading.Thread(target=worker, daemon=True).start()
+
+        def poll():
+            if "done" in box:
+                done(box.get("r"), box.get("e"))
+            else:
+                self.after(150, poll)
+        poll()
+
+    def check_updates(self, manual):
+        if self.new_release and manual:
+            return self.offer_update(*self.new_release)
+        if manual:
+            self.update_link.configure(text="Checking...")
+
+        def done(res, err):
+            self.update_link.configure(text=f"v{APP_VERSION}  •  Check for updates", text_color=MUTED)
+            if err or not res or not res[0]:
+                if manual:
+                    Popup(self, f"Couldn't check for updates right now.\n\n{err or 'No release found.'}")
+                return
+            if version_tuple(res[0]) > version_tuple(APP_VERSION):
+                self.new_release = res
+                self.update_link.configure(text=f"⬆ Update to v{res[0]} available - click here",
+                                           text_color=GREEN)
+                if manual:
+                    self.offer_update(*res)
+                else:
+                    self.flash(f"A new VoteBuddy (v{res[0]}) is out! Click the green link at the bottom to update.", 20)
+            elif manual:
+                Popup(self, f"You're up to date! (v{APP_VERSION})")
+        self.run_bg(latest_release, done)
+
+    def offer_update(self, version, notes, zip_url):
+        notes = "\n".join(l for l in notes.splitlines() if l.strip())[:500]
+        notes = notes.replace("**", "")
+        text = f"VoteBuddy v{version} is out (you have v{APP_VERSION}).\n\n{notes}\n\nUpdate now? VoteBuddy will restart. Your vote list is kept."
+        if Popup(self, text, ("Later", "Update now")).choice != "Update now":
+            return
+        if not FROZEN or not zip_url:
+            open_in_browser(RELEASES_PAGE)  # running from source: just show the download page
+            return
+        win = ctk.CTkToplevel(self)
+        win.title("Updating VoteBuddy")
+        set_icon(win)
+        win.resizable(False, False)
+        win.transient(self)
+        label = ctk.CTkLabel(win, text=f"Downloading v{version}...", font=ctk.CTkFont(size=14))
+        label.pack(padx=28, pady=(22, 8))
+        bar = ctk.CTkProgressBar(win, width=300)
+        bar.set(0)
+        bar.pack(padx=28, pady=(0, 24))
+        bring_up(win)
+        prog = {"p": 0.0}
+
+        def show_progress():
+            if win.winfo_exists() and prog["p"] < 1:
+                bar.set(prog["p"])
+                win.after(150, show_progress)
+        show_progress()
+
+        def work():
+            data = http_get(zip_url, "application/octet-stream",
+                            progress=lambda p: prog.__setitem__("p", min(p, 0.99)))
+            return install_update(data)
+
+        def done(ext_changed, err):
+            prog["p"] = 1
+            if err:
+                win.destroy()
+                Popup(self, f"The update didn't work, so nothing was changed.\n\n{err}\n\n"
+                            f"You can download it yourself from GitHub instead.", ("OK",))
+                return
+            bar.set(1)
+            label.configure(text="Done! Restarting VoteBuddy...")
+            self.data["updated_from"] = APP_VERSION
+            self.data["ext_changed"] = bool(ext_changed)
+            save(self.data)
+            self.after(800, self.restart)
+        self.run_bg(work, done)
+
+    def restart(self):
+        import subprocess
+        env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")  # start as a fresh app
+        subprocess.Popen([sys.executable], env=env, close_fds=True)
+        self.destroy()
+
+    def after_update_note(self):
+        old = self.data.pop("updated_from", None)
+        ext = self.data.pop("ext_changed", False)
+        if not old:
+            return
+        save(self.data)
+        msg = f"VoteBuddy updated from v{old} to v{APP_VERSION}!"
+        if ext:
+            msg += ("\n\nThe browser extension was updated too. Open your browser's extensions page "
+                    "and switch VoteBuddy Autofill OFF and back ON so the new version loads.")
+        Popup(self, msg)
+
+    def make_ad(self, master):
+        """Clickable server banner: the animated banner.gif, or a drawn one if it can't load."""
+        try:
+            from PIL import Image
+            gif = Image.open(resource(AD_GIF))
+            frames, delays = [], []
+            for i in range(getattr(gif, "n_frames", 1)):
+                gif.seek(i)
+                frames.append(ctk.CTkImage(gif.convert("RGBA"), size=gif.size))
+                delays.append(max(20, gif.info.get("duration", 100) or 100))
+        except Exception:
+            return self.make_drawn_ad(master)
+
+        label = ctk.CTkLabel(master, text="", image=frames[0], cursor="hand2")
+        label.bind("<Button-1>", lambda e: self.copy_ip(label))
+
+        def play(i=0):
+            if not label.winfo_exists():
+                return
+            label.configure(image=frames[i])
+            label.after(delays[i], play, (i + 1) % len(frames))
+        if len(frames) > 1:
+            label.after(delays[0], play, 1)
+        return label
+
+    def copy_ip(self, banner):
+        """Banner click: copy the server IP and show a little bubble next to the banner."""
+        self.clipboard_clear()
+        self.clipboard_append(AD_IP)
+        toast = getattr(self, "ip_toast", None)
+        if toast is None or not toast.winfo_exists():
+            toast = self.ip_toast = ctk.CTkLabel(
+                banner.master, text=f"✓ Server IP copied to your clipboard ({AD_IP})",
+                fg_color=GREEN, text_color="#ffffff", corner_radius=12, height=30,
+                font=ctk.CTkFont(size=12, weight="bold"))
+        toast.place(in_=banner, relx=0, rely=0.5, anchor="e", x=-10)
+        toast.lift()
+        if getattr(self, "ip_toast_job", None):
+            self.after_cancel(self.ip_toast_job)
+        self.ip_toast_job = self.after(2500, toast.place_forget)
+
+    def make_drawn_ad(self, master):
+        """Drawn server banner (peach bar with a light pill in the middle)."""
+        peach, peach_hover = "#f4b886", "#eea66c"
+        ad = ctk.CTkFrame(master, width=468, height=64, corner_radius=14, fg_color=peach,
+                          cursor="hand2")
+        ad.pack_propagate(False)
+        pill = ctk.CTkFrame(ad, corner_radius=26, fg_color="#f6e7dc", cursor="hand2")
+        pill.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.74, relheight=0.8)
+        title = ctk.CTkLabel(pill, text=AD_TEXT, text_color="#b45309", cursor="hand2",
+                             font=ctk.CTkFont(size=15, weight="bold"))
+        title.place(relx=0.5, rely=0.36, anchor="center")
+        sub = ctk.CTkLabel(pill, text=AD_SUBTEXT, text_color="#c2703a", cursor="hand2",
+                           font=ctk.CTkFont(size=11))
+        sub.place(relx=0.5, rely=0.74, anchor="center")
+
+        def hover(on):
+            ad.configure(fg_color=peach_hover if on else peach)
+        for w in (ad, pill, title, sub):
+            w.bind("<Button-1>", lambda e: self.copy_ip(ad))
+            w.bind("<Enter>", lambda e: hover(True))
+            w.bind("<Leave>", lambda e: hover(False))
+        return ad
 
     # ---- theme ----
     def toggle_theme(self):

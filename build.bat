@@ -6,6 +6,7 @@ cd /d "%~dp0"
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
   --name VoteBuddy --icon votebuddy.ico ^
   --add-data "votebuddy.ico;." ^
+  --add-data "banner.gif;." ^
   --collect-data customtkinter ^
   votebuddy.pyw || goto :fail
 
