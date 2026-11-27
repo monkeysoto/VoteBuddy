@@ -77,7 +77,9 @@ pip install -r requirements.txt pyinstaller
 build.bat
 ```
 
-The finished app is in `release\VoteBuddy.zip`. You can also run it without building: `pythonw votebuddy.pyw`.
+The finished app is in `release\VoteBuddy.zip`.
+
+Microsoft Store package: `python store\build_store.py`, which makes `release\VoteBuddy-<version>.msix`. See `store\SUBMISSION.md` for the Partner Center steps. Privacy policy: [PRIVACY.md](PRIVACY.md). You can also run it without building: `pythonw votebuddy.pyw`.
 
 ## How it works (for the curious)
 

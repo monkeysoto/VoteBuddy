@@ -44,6 +44,31 @@ APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__
 DATA_DIR = os.path.join(os.environ.get("APPDATA") or APP_DIR, "VoteBuddy")
 DATA_FILE = os.path.join(DATA_DIR, "votes.json")
 OLD_DATA_FILE = os.path.join(APP_DIR, "votes.json")  # where older versions saved
+def package_family_name():
+    """Our Microsoft Store package name when installed from the Store, else None."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        n = ctypes.c_uint32(0)
+        k32 = ctypes.windll.kernel32
+        if k32.GetCurrentPackageFamilyName(ctypes.byref(n), None) == 15700:  # not packaged
+            return None
+        buf = ctypes.create_unicode_buffer(n.value)
+        if k32.GetCurrentPackageFamilyName(ctypes.byref(n), buf) != 0:
+            return None
+        return buf.value or None
+    except Exception:
+        return None
+
+
+STORE_PFN = package_family_name()  # set = Store install: the Store handles updates and startup
+# The browser has to be able to see the extension folder. A Store app's own folder is
+# hidden and read-only, so the Store version copies the extension to the user's home folder.
+EXT_DIR = (os.path.join(os.path.expanduser("~"), "VoteBuddy Extension") if STORE_PFN
+           else os.path.join(APP_DIR, "extension"))
+
+
 def resource(name):
     """Files bundled inside the .exe (icon) or next to the script."""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -360,18 +385,28 @@ def bubble(master, text, command, kind="normal", **kw):
 
 def bring_up(win):
     """CTk pop-ups sometimes open behind the main window; pull them forward."""
-    win.after(120, lambda: (win.lift(), win.focus_force()))
+    def up():
+        if not win.winfo_exists():
+            return
+        win.lift()
+        win.focus_force()
+        if win.attributes("-topmost"):
+            return  # already always-on-top (the "did you vote?" pop-up)
+        win.attributes("-topmost", True)   # briefly on top so it can't hide behind anything
+        win.after(400, lambda: win.winfo_exists() and win.attributes("-topmost", False))
+    win.after(120, up)
+    win.after(700, up)  # again, in case the main window was still opening
 
 
 class Popup(ctk.CTkToplevel):
     """Dark-mode friendly message box. Returns the clicked button's text."""
 
-    def __init__(self, master, text, buttons=("OK",), title="VoteBuddy"):
+    def __init__(self, master, text, buttons=("OK",), title="VoteBuddy", wrap=340):
         super().__init__(master)
         self.title(title)
         self.resizable(False, False)
         self.choice = None
-        ctk.CTkLabel(self, text=text, font=ctk.CTkFont(size=14), wraplength=340,
+        ctk.CTkLabel(self, text=text, font=ctk.CTkFont(size=14), wraplength=wrap,
                      justify="left").pack(padx=24, pady=(22, 14))
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(padx=20, pady=(0, 18), anchor="e")
@@ -686,7 +721,7 @@ class App(ctk.CTk):
         self.auto_var = tk.BooleanVar(value=self.data["auto_open"])
         self.fill_var = tk.BooleanVar(value=self.data["autofill"])
         self.submit_var = tk.BooleanVar(value=self.data["autosubmit"])
-        self.startup_var = tk.BooleanVar(value=os.path.exists(STARTUP_FILE))
+        self.startup_var = tk.BooleanVar(value=self.startup_enabled())
         self.dark_var = tk.BooleanVar(value=self.data["theme"] == "dark")
         for text, var, cmd in (
             ("Auto-open", self.auto_var, lambda: self._set("auto_open", self.auto_var.get())),
@@ -705,10 +740,18 @@ class App(ctk.CTk):
         foot.pack(side="bottom", fill="x", padx=18, pady=(2, 10))
         ctk.CTkLabel(foot, text=CREDITS + " ", text_color=MUTED,  # space: italics clip the last letter
                      font=ctk.CTkFont(size=12, slant="italic")).pack(side="right")
-        self.update_link = ctk.CTkLabel(foot, text=f"v{APP_VERSION}  •  Check for updates", text_color=MUTED,
-                                        cursor="hand2", font=ctk.CTkFont(size=12, underline=True))
+        if STORE_PFN:  # the Microsoft Store keeps this version up to date
+            self.update_link = ctk.CTkLabel(foot, text=f"v{APP_VERSION}  •  Microsoft Store", text_color=MUTED,
+                                            font=ctk.CTkFont(size=12))
+        else:
+            self.update_link = ctk.CTkLabel(foot, text=f"v{APP_VERSION}  •  Check for updates", text_color=MUTED,
+                                            cursor="hand2", font=ctk.CTkFont(size=12, underline=True))
+            self.update_link.bind("<Button-1>", lambda e: self.check_updates(manual=True))
         self.update_link.pack(side="right", padx=(0, 16))
-        self.update_link.bind("<Button-1>", lambda e: self.check_updates(manual=True))
+        ext_link = ctk.CTkLabel(foot, text="Browser extension", text_color=MUTED, cursor="hand2",
+                                font=ctk.CTkFont(size=12, underline=True))
+        ext_link.pack(side="right", padx=(0, 16))
+        ext_link.bind("<Button-1>", lambda e: self.extension_help())
         self.new_release = None  # (version, notes, zip_url) once we know there's a newer one
         self.status = ctk.CTkLabel(foot, text="", text_color=MUTED, anchor="w")
         self.status.pack(side="left", fill="x", expand=True)
@@ -747,9 +790,46 @@ class App(ctk.CTk):
 
         self.refresh()
         self.after(1000, self.tick)
-        threading.Thread(target=cleanup_old_exe, daemon=True).start()
-        self.after(1500, self.after_update_note)
-        self.after(5000, lambda: self.check_updates(manual=False))
+        if STORE_PFN:
+            self.after(1500, self.sync_store_extension)
+            self.bind("<FocusIn>", lambda e: self.startup_var.set(self.startup_enabled()), add="+")
+        else:
+            threading.Thread(target=cleanup_old_exe, daemon=True).start()
+            self.after(1500, self.after_update_note)
+            self.after(5000, lambda: self.check_updates(manual=False))
+
+    # ---- browser extension ----
+    def sync_store_extension(self):
+        """Store version: keep a copy of the extension where the browser can load it."""
+        import shutil
+        src = os.path.join(APP_DIR, "extension")
+        new, old = extension_version(src), extension_version(EXT_DIR)
+        if not new or new == old:
+            return
+        try:
+            shutil.copytree(src, EXT_DIR, dirs_exist_ok=True)
+        except OSError as e:
+            self.flash(f"Couldn't copy the browser extension: {e}", 15)
+            return
+        if old:
+            Popup(self, "The browser extension was updated. Open your browser's extensions page and "
+                        "switch VoteBuddy Autofill OFF and back ON so the new version loads.")
+        elif not self.data.get("ext_help_shown"):
+            self._set("ext_help_shown", True)
+            self.extension_help(first=True)
+
+    def extension_help(self, first=False):
+        intro = ("Welcome to VoteBuddy!\n\n" if first else "") + (
+            "The free VoteBuddy Autofill extension types your username in, clicks Vote when "
+            "there's no captcha and reads each site's timer. It takes 30 seconds to add:\n\n"
+            "1. In Chrome open  chrome://extensions  (Edge: edge://extensions, Opera: opera://extensions)\n"
+            "2. Turn on Developer mode\n"
+            "3. Click Load unpacked and pick this folder:\n"
+            f"     {EXT_DIR}\n\n"
+            "VoteBuddy works without it too - you just paste your name and click Vote yourself.")
+        if Popup(self, intro, ("Close", "Open folder"), wrap=560).choice == "Open folder":
+            os.makedirs(EXT_DIR, exist_ok=True)
+            os.startfile(EXT_DIR)
 
     # ---- updates ----
     def run_bg(self, work, done):
@@ -1189,7 +1269,26 @@ class App(ctk.CTk):
         save(self.data)
         self.refresh()
 
+    def startup_enabled(self):
+        if not STORE_PFN:
+            return os.path.exists(STARTUP_FILE)
+        try:  # Windows keeps the Store startup task's on/off state here (2 = on, 4 = on by policy)
+            import winreg
+            key = (r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion"
+                   rf"\AppModel\SystemAppData\{STORE_PFN}\VoteBuddyStartup")
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+                return winreg.QueryValueEx(k, "State")[0] in (2, 4)
+        except OSError:
+            return False
+
     def toggle_startup(self):
+        if STORE_PFN:
+            # Store apps can't add themselves to startup; Windows' Startup apps page has the switch
+            self.startup_var.set(self.startup_enabled())
+            Popup(self, "Windows' Startup apps settings will open.\n\n"
+                        "Find VoteBuddy in the list and switch it On (or Off).")
+            os.startfile("ms-settings:startupapps")
+            return
         try:
             if self.startup_var.get():
                 if FROZEN:

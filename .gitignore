@@ -10,3 +10,6 @@ release/
 *.spec
 __pycache__/
 *.pyc
+
+# store build output
+build_store.log
