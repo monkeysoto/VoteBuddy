@@ -94,7 +94,7 @@ AD_SUBTEXT = "Minecraft server  •  click to copy the IP"
 AD_IP = "chebishmc.net"   # clicking the banner copies this server IP
 AD_GIF = "banner.gif"   # 468x60 animated banner shipped with the app; text above is the fallback
 CREDITS = "Made by MonkeySoto"
-AD_PROMO = "Wanna Advertise your Minecraft server?\nContact monkeysoto on Discord"
+AD_PROMO = "Want to Advertise your Minecraft server?\nContact monkeysoto on Discord"
 
 RADIUS = 18          # roundness of buttons ("bubble" look)
 GREEN = ("#16a34a", "#22c55e")
@@ -178,7 +178,7 @@ def start_report_server():
 
 
 # ---- updates from GitHub ----
-APP_VERSION = "1.3"
+APP_VERSION = "1.4"
 GITHUB_REPO = "monkeysoto/VoteBuddy"
 RELEASES_PAGE = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
@@ -697,7 +697,7 @@ class App(ctk.CTk):
         ctk.set_appearance_mode(self.data["theme"])
         ctk.set_default_color_theme("blue")
         super().__init__()
-        self.title("VoteBuddy - Minecraft vote helper")
+        self.title("VoteBuddy - Server Vote helper")
         set_icon(self)
         self.geometry("1040x540")
         self.minsize(760, 400)
@@ -1113,7 +1113,7 @@ class App(ctk.CTk):
         self.lift()
         self.attributes("-topmost", True)
         self.after(1500, lambda: self.attributes("-topmost", False))
-        self.title(f"({n} ready) VoteBuddy - Minecraft vote helper")
+        self.title(f"({n} ready) VoteBuddy - Server Vote helper")
 
     def phone_alert(self, indexes):
         topic = self.data.get("phone_topic")
@@ -1158,7 +1158,7 @@ class App(ctk.CTk):
             self.queue_confirm(site)
             if n < len(indexes) - 1:
                 time.sleep(0.4)  # keeps the browser from dropping tabs
-        self.title("VoteBuddy - Minecraft vote helper")
+        self.title("VoteBuddy - Server Vote helper")
         self.flash(f"Opened {len(indexes)} vote page(s). Confirm each one in the pop-up when you've voted.")
         self.refresh()
 
